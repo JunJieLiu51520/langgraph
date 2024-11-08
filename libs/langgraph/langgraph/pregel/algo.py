@@ -203,8 +203,6 @@ def apply_writes(
     # sort tasks on path, to ensure deterministic order for update application
     # any path parts after the 3rd are ignored for sorting
     # (we use them for eg. task ids which aren't good for sorting)
-    t = "\n".join(str((task.name, task.path, task.writes)) for task in tasks)
-    print(f"tasks\n{t}")
     tasks = sorted(tasks, key=lambda t: t.path)
 
     # update seen versions
