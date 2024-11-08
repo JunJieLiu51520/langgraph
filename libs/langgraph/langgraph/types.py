@@ -1,12 +1,17 @@
+import asyncio
+import concurrent
+import concurrent.futures
 from collections import deque
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Any,
+    Awaitable,
     Callable,
     Literal,
     NamedTuple,
     Optional,
+    ParamSpec,
     Sequence,
     Type,
     Union,
@@ -307,3 +312,36 @@ class LoopProtocol:
         self.store = store
         self.step = step
         self.stop = stop
+
+
+P = ParamSpec("P")
+T = TypeVar("T")
+
+
+def call(
+    func: str | Callable[P, T], *args: P.args, **kwargs: P.kwargs
+) -> concurrent.futures.Future[T]:
+    from langgraph.constants import CONFIG_KEY_CALL
+    from langgraph.utils.config import get_configurable
+
+    conf = get_configurable()
+    impl = conf[CONFIG_KEY_CALL]
+    fut = impl(func, *args, **kwargs)
+    if not isinstance(fut, concurrent.futures.Future):
+        raise RuntimeError("In an async context, use acall() instead of call()")
+    return fut
+
+
+def acall(
+    func: str | Callable[P, Union[T, Awaitable[T]]], *args: P.args, **kwargs: P.kwargs
+) -> asyncio.Future[T]:
+    from langgraph.constants import CONFIG_KEY_CALL
+    from langgraph.utils.config import get_configurable
+
+    conf = get_configurable()
+    impl = conf[CONFIG_KEY_CALL]
+    fut = impl(func, *args, **kwargs)
+    if isinstance(fut, concurrent.futures.Future):
+        fut = asyncio.wrap_future(fut)
+    fut.cancel
+    return fut

@@ -91,6 +91,11 @@ class PregelTaskWrites(NamedTuple):
     triggers: Sequence[str]
 
 
+class Call:
+    func: str | Callable
+    input: Any
+
+
 def should_interrupt(
     checkpoint: Checkpoint,
     interrupt_nodes: Union[All, Sequence[str]],
@@ -198,7 +203,9 @@ def apply_writes(
     # sort tasks on path, to ensure deterministic order for update application
     # any path parts after the 3rd are ignored for sorting
     # (we use them for eg. task ids which aren't good for sorting)
-    tasks = sorted(tasks, key=lambda t: t.path[:3])
+    t = "\n".join(str((task.name, task.path, task.writes)) for task in tasks)
+    print(f"tasks\n{t}")
+    tasks = sorted(tasks, key=lambda t: t.path)
 
     # update seen versions
     for task in tasks:
@@ -482,10 +489,16 @@ def prepare_single_task(
                 PUSH,
                 str(idx),
             )
-        elif len(task_path) == 4:
+        elif len(task_path) >= 4:
             # new PUSH tasks, executed in superstep n
             # (PUSH, parent task path, idx of PUSH write, id of parent task)
-            task_path_t = cast(tuple[str, tuple, int, str], task_path)
+            task_path_t = cast(
+                Union[
+                    tuple[str, tuple, int, str],
+                    tuple[str, tuple, int, str, Optional[Call]],
+                ],
+                task_path,
+            )
             writes_for_path = [w for w in pending_writes if w[0] == task_path_t[3]]
             if task_path_t[2] >= len(writes_for_path):
                 logger.warning(
@@ -493,8 +506,14 @@ def prepare_single_task(
                 )
                 return
             packet = writes_for_path[task_path_t[2]][2]
+            if packet is None:
+                if len(task_path_t) == 5:
+                    packet = task_path_t[4]
+                else:
+                    # no packet to replay, this is a "call" task
+                    return
+            # TODO handle Call packets
             if not isinstance(packet, Send):
-                print("packet", task_path_t, writes_for_path)
                 logger.warning(
                     f"Ignoring invalid packet type {type(packet)} in pending writes"
                 )
@@ -526,7 +545,7 @@ def prepare_single_task(
             "langgraph_step": step,
             "langgraph_node": packet.node,
             "langgraph_triggers": triggers,
-            "langgraph_path": task_path,
+            "langgraph_path": task_path[:3],
             "langgraph_checkpoint_ns": task_checkpoint_ns,
         }
         if task_id_checksum is not None:
@@ -565,7 +584,7 @@ def prepare_single_task(
                                 channels,
                                 managed,
                                 PregelTaskWrites(
-                                    task_path, packet.node, writes, triggers
+                                    task_path[:3], packet.node, writes, triggers
                                 ),
                                 config,
                             ),
@@ -588,11 +607,11 @@ def prepare_single_task(
                     proc.retry_policy,
                     None,
                     task_id,
-                    task_path,
+                    task_path[:3],
                 )
 
         else:
-            return PregelTask(task_id, packet.node, task_path)
+            return PregelTask(task_id, packet.node, task_path[:3])
     elif task_path[0] == PULL:
         # (PULL, node name)
         name = cast(str, task_path[1])
@@ -636,7 +655,7 @@ def prepare_single_task(
                 "langgraph_step": step,
                 "langgraph_node": name,
                 "langgraph_triggers": triggers,
-                "langgraph_path": task_path,
+                "langgraph_path": task_path[:3],
                 "langgraph_checkpoint_ns": task_checkpoint_ns,
             }
             if task_id_checksum is not None:
@@ -675,7 +694,9 @@ def prepare_single_task(
                                     checkpoint,
                                     channels,
                                     managed,
-                                    PregelTaskWrites(task_path, name, writes, triggers),
+                                    PregelTaskWrites(
+                                        task_path[:3], name, writes, triggers
+                                    ),
                                     config,
                                 ),
                                 CONFIG_KEY_STORE: (
@@ -697,10 +718,10 @@ def prepare_single_task(
                         proc.retry_policy,
                         None,
                         task_id,
-                        task_path,
+                        task_path[:3],
                     )
             else:
-                return PregelTask(task_id, name, task_path)
+                return PregelTask(task_id, name, task_path[:3])
 
 
 def _proc_input(
